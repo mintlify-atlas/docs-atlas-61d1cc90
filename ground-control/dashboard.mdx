@@ -1,0 +1,137 @@
+---
+title: "Telemetry dashboard"
+description: Run and use the Python ground control dashboard to monitor live rocket telemetry and send commands.
+---
+
+The ground control dashboard is a Python/Tkinter application that connects to the launcher over WiFi and displays live telemetry, GPS position, and rocket state. It also lets you send commands — calibrate the gyro, upload PID gains, or trigger ignition digitally.
+
+## Installation
+
+<Steps>
+  <Step title="Install dependencies">
+    From the `Firmware/` directory:
+
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+    | Package | Minimum version |
+    |---------|----------------|
+    | matplotlib | 3.5.0 |
+    | numpy | 1.21.0 |
+    | tkinter | Built into Python (Linux: `sudo apt install python3-tk`) |
+  </Step>
+  <Step title="Launch the dashboard">
+    ```bash
+    python dashboard.py
+    ```
+
+    The window opens at 1100×850 px. Use the **Zoom** slider in the top bar to scale the UI.
+  </Step>
+</Steps>
+
+## Network setup
+
+Connect your laptop to the `ROCKET_LAUNCHER` WiFi network before starting the dashboard.
+
+| Parameter | Value |
+|-----------|-------|
+| SSID | `ROCKET_LAUNCHER` |
+| Launcher IP | `192.168.4.1` |
+| UDP port | `4444` |
+
+The dashboard auto-discovers the launcher: it sends a `HELLO` keepalive to `192.168.4.1:4444` every 2 seconds and updates the **Status** bar as soon as it receives a reply. No manual IP entry is required.
+
+<Note>
+The status bar reads "Connecting to Launcher AP..." in red until the first UDP packet is received from the launcher, at which point it turns green and shows the launcher's IP address.
+</Note>
+
+## UI sections
+
+### Status bar (top)
+
+Always visible at the top of the window. Shows the current connection status, a **Zoom** slider (scales from 1.0× to 2.5×), a **Save Graph** button, and a **Reset Data** button.
+
+### Mission Control
+
+| Element | Description |
+|---------|-------------|
+| State dot | Colored circle indicating current rocket state (see table below) |
+| State label | Text name of the current state |
+| CALIBRATE GYRO | Prompts confirmation, then sends `calibrate` to the launcher |
+| DIGITAL LAUNCH | Prompts confirmation, then sends `launch` to the launcher |
+
+**State dot color mapping:**
+
+| State | Color |
+|-------|-------|
+| IDLE | Gray |
+| ARMED | Yellow (`#F4D03F`) |
+| IGNITING | Orange (`#FF8C00`) |
+| FLIGHT | Green |
+| DISCONNECTED | Gray |
+
+### PID Controller Tuning
+
+| Element | Description |
+|---------|-------------|
+| Kp spinbox | Proportional gain; range 0.0–10.0, step 0.1 |
+| Kd spinbox | Derivative gain; range 0.0–10.0, step 0.05 |
+| UPLOAD NEW PID | Sends `PID,<Kp>,<Kd>` to the launcher |
+| Active Hardware Settings | Read-only display of the Kp and Kd values currently active on the rocket |
+
+### Environment & Location
+
+| Element | Description |
+|---------|-------------|
+| GPS status bubble | Colored dot and label showing GPS fix state |
+| Altitude (m ASL) | EMA-filtered barometric altitude from the launcher's BMP180 |
+| Latitude | GPS latitude (0.000000 when no fix) |
+| Longitude | GPS longitude (0.000000 when no fix) |
+
+**GPS status bubble colors:**
+
+| GPS state | Color | Label |
+|-----------|-------|-------|
+| 0 | Red | NO NMEA |
+| 1 | Orange | SEARCHING |
+| 2 | Green | FIX ACQUIRED |
+
+### Live Telemetry
+
+Numeric readouts updated at ~10 Hz from the incoming UDP stream:
+
+| Field | Unit |
+|-------|------|
+| Time | ms (rocket `millis()`) |
+| Roll | degrees |
+| Rate | °/s |
+| Servo Output | integer, clamped ±12 |
+| Skew | degrees (launcher tilt at calibration) |
+
+### Plot
+
+Rolling 100-point live chart of:
+
+- **Roll Angle** (blue line)
+- **Roll Rate × 0.25** (orange line, scaled to fit the same axis)
+- Green shading where servo output is positive
+- Red shading where servo output is negative
+
+## Buttons reference
+
+| Button | Confirmation required | UDP command sent |
+|--------|-----------------------|-----------------|
+| CALIBRATE GYRO | Yes — "Keep rocket STILL. Zeroing Gyro." | `calibrate` |
+| DIGITAL LAUNCH | Yes — "This bypasses the physical launch button." | `launch` |
+| UPLOAD NEW PID | No | `PID,<Kp>,<Kd>` |
+| Save Graph | No | — (exports PNG with mission event markers) |
+| Reset Data | No | — (clears all telemetry buffers) |
+
+<Warning>
+**DIGITAL LAUNCH** bypasses the physical launch button on the launcher. Confirm the launcher is armed and the rocket has reported READY before using it.
+</Warning>
+
+## Connection watchdog
+
+A background thread sends `HELLO` to `192.168.4.1:4444` every 2 seconds. This keeps the launcher aware of the dashboard's IP address so it can direct UDP telemetry back correctly. If the laptop IP changes (e.g., after reconnecting to WiFi), the launcher updates its target on the next `HELLO`.

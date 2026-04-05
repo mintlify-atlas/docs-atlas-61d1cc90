@@ -1,0 +1,137 @@
+---
+title: "Safety guidelines"
+description: Safety precautions and system safeguards for operating the MANPADS rocket prototype.
+---
+
+<Warning>
+  This is an experimental prototype built from consumer electronics and 3D-printed components. It is not a certified or commercially approved device. Always comply with your local laws and regulations governing amateur rocketry, model rockets, and ignition systems before operating this system.
+</Warning>
+
+---
+
+## System safety features
+
+The firmware implements multiple hardware and software interlocks that reduce the risk of accidental ignition or uncontrolled operation.
+
+### Arm switch interlock
+
+The arm switch (GPIO5) is checked continuously in the main loop. If the switch is flipped to SAFE at any point while the system is in ARMING, READY, or IGNITING state, the launcher immediately calls `abortSequence()`:
+
+```cpp
+if (!isSwitchArmed() && currentState != SAFE) {
+    abortSequence("Arming switch flipped OFF.");
+    return;
+}
+```
+
+The arm switch is your primary safety control. It overrides all software state.
+
+### Heartbeat watchdog
+
+While in `READY` state, the launcher monitors incoming `DATA` and `ALIVE` packets from the rocket. If no packet is received for **2000 ms**, the launcher calls `abortSequence()` automatically:
+
+```cpp
+if (millis() - lastHeartbeatTime > HEARTBEAT_TIMEOUT) {
+    abortSequence("Lost heartbeat from Rocket!");
+    return;
+}
+```
+
+This ensures the system aborts if the rocket loses power or the UART link is disrupted after arming.
+
+### Launch button hold requirement
+
+The physical launch button (GPIO18) must be held continuously for **1 full second** before ignition is triggered. A brief or accidental press is ignored:
+
+```cpp
+while (isButtonPressed() && millis() - triggerStart < 1000) { ... }
+if (isButtonPressed()) triggered = true;
+```
+
+### Rocket arming timeout
+
+During the ARMING state, the launcher waits up to **8 seconds** for a `READY` message from the rocket. If the timeout expires without receiving `READY`, the launcher calls `abortSequence()`:
+
+```cpp
+if (!rocketReady) { abortSequence("Rocket Timeout."); return; }
+```
+
+### Ignition ACK requirement
+
+After sending `IGNITE`, the launcher waits up to **5 seconds** for an `IGNITED` acknowledgement from the rocket. If no ACK is received, `abortSequence()` is called:
+
+```cpp
+while (millis() - igniteStart < 5000) { ... }
+if (!rocketIgnited) { abortSequence("No IGNITED ACK received."); }
+```
+
+### Digital launch confirmation
+
+The dashboard requires explicit confirmation before sending the `launch` UDP command. A dialog box displays **"This bypasses the physical launch button."** The command is not sent unless the operator clicks OK.
+
+### SAFE state reset
+
+After any abort or successful ignition, the launcher enters `waitForSwitchReset()` and will not accept a new arming sequence until the arm switch has been physically returned to SAFE:
+
+```cpp
+void waitForSwitchReset() {
+    currentState = SAFE;
+    while (isSwitchArmed()) { ... } // blink LED until switch is lowered
+}
+```
+
+---
+
+## Abort sequence behavior
+
+`abortSequence()` executes the following steps regardless of the trigger reason:
+
+1. Launcher servo returns to OFF position (55°)
+2. LED turns off
+3. Error tone plays (5 rapid beeps, 100 ms each)
+4. System enters `waitForSwitchReset()` and blinks the LED until the arm switch is lowered
+
+```cpp
+void abortSequence(String reason) {
+    launcherServo.write(SERVO_OFF);
+    digitalWrite(LED_PIN, LOW);
+    errorTone();
+    waitForSwitchReset();
+}
+```
+
+<Note>
+  The abort sequence does not send any command to the rocket. If `abortSequence()` is triggered before `IGNITE` is sent, the rocket remains in `ARMED` state. Power-cycling the rocket resets it to `IDLE`.
+</Note>
+
+---
+
+## Operational safety rules
+
+Follow these rules on every operation:
+
+- Never arm the system with people or obstacles in the downrange area
+- Always perform gyro calibration with the rocket stationary in the tube
+- Verify GPS status before launch — red (no module) is a hard stop; orange (searching) is acceptable
+- Keep the launch area clear during the entire arming sequence, not just at ignition
+- Use the physical arm switch as your primary safety control — not the dashboard
+- Inspect the igniter and rocket motor connections before every launch attempt
+- Do not re-arm the system after an abort until you have identified and resolved the cause
+
+---
+
+## Buzzer feedback reference
+
+The launcher buzzer provides audible feedback for all state transitions. Use this table to interpret what you hear:
+
+| Sound | Source function | Meaning |
+|-------|-----------------|---------|
+| 2 beeps (150 ms each) | `successTone()` | Arming complete — launcher is READY |
+| 5 rapid beeps (100 ms each) | `errorTone()` | Abort or failure — check state and switch |
+| Continuous buzz while button held | `buzzerOn()` in READY loop | Launch button countdown in progress |
+| Repeating error tone at boot | Boot GPS check failure | GPS module not detected — do not proceed |
+| 3 rapid beeps during arming | ARMING state | `READY` received from rocket |
+
+<Note>
+  The success tone plays at the end of the ARMING state, just before the LED turns on solid. If you hear the error tone at any point after arming, flip the arm switch to SAFE and investigate before re-arming.
+</Note>

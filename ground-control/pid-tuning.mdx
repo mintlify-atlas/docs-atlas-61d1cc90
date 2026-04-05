@@ -1,0 +1,122 @@
+---
+title: "PID tuning"
+description: Tune the rocket's PD roll stabilization controller at runtime without reflashing firmware.
+---
+
+The rocket runs a PD (proportional-derivative) controller that drives the four canard servos to counteract roll during flight. You can update the gains live from the dashboard without reflashing firmware.
+
+## How the controller works
+
+Each control loop iteration (~50 ms) the rocket computes:
+
+```
+output = (Kp × roll_angle) + (Kd × roll_rate)
+servo_offset = constrain(output, -12, 12)
+```
+
+`servo_offset` is added to each canard servo's center position. The servos only move in `FLIGHT` state; in all other states `servo_offset` is forced to zero.
+
+**Default gains (from firmware):** `Kp = 0.5`, `Kd = 0.2`
+
+### Parameter effects
+
+| Parameter | Increase effect | Decrease effect |
+|-----------|----------------|----------------|
+| Kp | More aggressive roll correction; may cause oscillation if too high | Sluggish response; rocket drifts without correcting |
+| Kd | Damps oscillation, smooths out corrections | Less damping; overshoot and oscillation more likely |
+
+---
+
+## Tuning from the dashboard
+
+<Steps>
+  <Step title="Connect and verify telemetry">
+    Launch the dashboard and confirm the rocket is in `IDLE` or `ARMED` state with telemetry flowing. The **Live Telemetry** section should show live Roll and Rate values, and the **Active Hardware Settings** display should show non-zero Kp/Kd values.
+  </Step>
+  <Step title="Enter new gain values">
+    In the **PID Controller Tuning** section, set your target values using the spinboxes:
+
+    | Spinbox | Range | Step |
+    |---------|-------|------|
+    | Kp (Proportional) | 0.0 – 10.0 | 0.1 |
+    | Kd (Derivative) | 0.0 – 10.0 | 0.05 |
+  </Step>
+  <Step title="Upload the new gains">
+    Click **UPLOAD NEW PID**. The dashboard sends `PID,<Kp>,<Kd>` over UDP to the launcher, which relays it to the rocket over UART.
+  </Step>
+  <Step title="Confirm the rocket applied the update">
+    Watch the **Active Hardware Settings** display. Once the rocket receives the command, its next `STATUS:` packet will reflect the new Kp and Kd values. The display updates within one telemetry cycle (~50 ms).
+  </Step>
+  <Step title="Observe the effect in flight">
+    On the next flight, watch the **Roll Angle** and **Roll Rate** traces on the live plot. Green/red shading shows when and how hard the servos are working. Adjust gains and re-upload as needed between flights.
+  </Step>
+</Steps>
+
+---
+
+## Sending a PID command manually
+
+You can also send PID updates directly from a terminal without the dashboard:
+
+```bash
+echo -n "PID,0.8,0.3" | nc -u 192.168.4.1 4444
+```
+
+Replace `0.8` and `0.3` with your target Kp and Kd values.
+
+---
+
+## How the command flows through the system
+
+```
+Dashboard
+  └─ sends "PID,0.8,0.3" over UDP
+       └─ Launcher (processUDP) receives packet
+            └─ relays "PID,0.8,0.3" over UART to rocket
+                 └─ Rocket parses command
+                      └─ sets Kp=0.8, Kd=0.3
+                           └─ next STATUS packet confirms: STATUS:FLIGHT,0.80,0.30,<skew>
+```
+
+---
+
+## Calibrating the gyro before tuning
+
+Accurate tuning depends on a good gyro zero. Always calibrate with the rocket stationary in its launch tube before each flight.
+
+<Steps>
+  <Step title="Keep the rocket still">
+    Place the rocket in the launch tube and ensure nothing is moving.
+  </Step>
+  <Step title="Click CALIBRATE GYRO in the dashboard">
+    After confirming the dialog, the dashboard sends `calibrate` to the launcher, which relays `CALIBRATE` to the rocket.
+
+    Alternatively, the launcher sends `CALIBRATE` automatically just before `IGNITE` when a launch is triggered.
+  </Step>
+  <Step title="Wait for calibration to complete">
+    The rocket averages **200 gyro samples over ~1 second**, zeroes the roll angle, and calculates `physical_skew_angle` from the accelerometer (the angular offset of the launch tube from true vertical). The **Skew** field in Live Telemetry will update once calibration is done.
+  </Step>
+</Steps>
+
+<Note>
+`physical_skew_angle` represents the physical tilt of the launcher tube at the moment of calibration. It is included in telemetry for reference but does not affect the PD control loop itself.
+</Note>
+
+---
+
+## Recommended starting values and tips
+
+Start with the firmware defaults and adjust based on what you observe in the roll plot:
+
+| Symptom | Action |
+|---------|--------|
+| Oscillating roll angle (hunting back and forth) | Increase Kd, or decrease Kp slightly |
+| Roll angle not correcting fast enough | Increase Kp slightly |
+| Overcorrection / overshoot | Decrease Kp |
+| Corrects well but oscillates at the end of a correction | Increase Kd |
+
+**Suggested starting point:** `Kp = 0.5`, `Kd = 0.2`
+
+<Tip>
+Make one change at a time. Upload, fly, observe the plot, then adjust. Changing both Kp and Kd at once makes it harder to identify which parameter caused a change in behavior.
+</Tip>

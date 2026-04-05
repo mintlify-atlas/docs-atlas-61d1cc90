@@ -1,0 +1,69 @@
+---
+title: "MANPADS Rocket & Launcher"
+description: "A low-cost proof-of-concept guided rocket and launcher prototype using ESP32 microcontrollers, 3D-printed components, and PD-controlled canard fins for roll stabilization."
+---
+
+Welcome to the MANPADS Rocket & Launcher documentation. This project is a proof-of-concept prototype of a low-cost rocket launcher and guided rocket system built using consumer electronics and 3D-printed components — total hardware cost approximately **$96**.
+
+The system features an onboard ESP32 flight computer with gyroscopic roll stabilization, a ground station with GPS and sensor fusion, and a Python telemetry dashboard for real-time monitoring and PID tuning.
+
+<CardGroup cols={2}>
+  <Card title="System Overview" icon="diagram-project" href="/system-overview">
+    Understand the full architecture: rocket, launcher, and ground control
+  </Card>
+  <Card title="Bill of Materials" icon="list-check" href="/bill-of-materials">
+    Complete hardware list with component costs and specifications
+  </Card>
+  <Card title="Firmware Setup" icon="microchip" href="/firmware/setup">
+    Flash the rocket flight computer and launcher with PlatformIO
+  </Card>
+  <Card title="Launch Procedure" icon="rocket" href="/operations/launch-procedure">
+    Step-by-step launch checklist from power-on to ignition
+  </Card>
+</CardGroup>
+
+## What's in this system
+
+<CardGroup cols={3}>
+  <Card title="Rocket" icon="arrow-up" href="/hardware/rocket">
+    ESP32 flight computer, MPU6050 IMU, four canard servos, folding fins
+  </Card>
+  <Card title="Launcher" icon="tower-broadcast" href="/hardware/launcher">
+    Ground station with GPS, compass, barometer, WiFi AP, and ignition servo
+  </Card>
+  <Card title="Dashboard" icon="chart-line" href="/ground-control/dashboard">
+    Python telemetry app with live plots, PID tuning, and digital launch
+  </Card>
+</CardGroup>
+
+## Quick start
+
+<Steps>
+  <Step title="Gather hardware">
+    Review the [bill of materials](/bill-of-materials) and source all components. The full prototype costs approximately $96.
+  </Step>
+  <Step title="Print and assemble">
+    Print the CAD components from the Fusion 360 files in the repository. See the [rocket hardware guide](/hardware/rocket) and [launcher hardware guide](/hardware/launcher) for assembly details.
+  </Step>
+  <Step title="Flash firmware">
+    Install PlatformIO and flash both the rocket flight computer and launcher ground station. See the [firmware setup guide](/firmware/setup).
+  </Step>
+  <Step title="Connect the dashboard">
+    Connect your laptop to the `ROCKET_LAUNCHER` WiFi network and run `dashboard.py` to see live telemetry. See the [dashboard guide](/ground-control/dashboard).
+  </Step>
+  <Step title="Run a launch">
+    Follow the [launch procedure](/operations/launch-procedure) to arm the system, verify telemetry, and ignite.
+  </Step>
+</Steps>
+
+## Key capabilities
+
+- **Roll stabilization** — PD controller reads MPU6050 gyro at ~20 Hz and drives four canard servos with up to ±12° deflection
+- **Wireless telemetry** — Rocket streams `DATA` packets to launcher over UART at 115200 baud; launcher relays via UDP WiFi to dashboard
+- **Sensor fusion** — Launcher combines QMC5883L compass, BMP180 barometer, and GPS for heading, altitude, and position
+- **Runtime PID tuning** — Upload new `Kp` and `Kd` gains from the dashboard without reflashing firmware
+- **Safety state machine** — Arm switch, heartbeat watchdog, and abort sequences prevent accidental ignition
+
+<Note>
+  This is a proof-of-concept prototype. Always follow the [safety guidelines](/operations/safety) before operating the system.
+</Note>

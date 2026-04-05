@@ -1,0 +1,129 @@
+---
+title: "Wiring reference"
+description: Complete pin assignments and wiring diagrams for the rocket flight computer and launcher ground station.
+---
+
+<Note>
+The firmware source files (`Firmware/Rocket/src/main.cpp` and `Firmware/Launcher/src/main.cpp`) are the authoritative source for all pin assignments. `docs/WIRING.md` contains several discrepancies from the source — the tables below use the correct values from firmware.
+</Note>
+
+## Rocket flight computer (ESP32 DevKit V1)
+
+### Servo connections
+
+| Function | GPIO pin |
+|---|---|
+| Left canard | 26 |
+| Right canard | 25 |
+| Up canard | 27 |
+| Down canard | 14 |
+| Ignition servo | 5 |
+
+### Servo center calibration
+
+| Servo | Center angle | Max deflection |
+|---|---|---|
+| Left | 115° | ±12° |
+| Right | 80° | ±12° |
+| Up | 80° | ±12° |
+| Down | 115° | ±12° |
+| Ignition | — | ON=150°, OFF=35° |
+
+### I2C bus (MPU6050)
+
+| Signal | GPIO pin |
+|---|---|
+| SDA | 21 |
+| SCL | 22 |
+
+### UART to launcher (Serial2)
+
+| Signal | GPIO pin | Baud rate |
+|---|---|---|
+| TX2 | 17 | 115200 |
+| RX2 | 16 | 115200 |
+
+---
+
+## Launcher ground station (ESP32 DevKit V1)
+
+### I2C bus (shared by QMC5883L, BMP180)
+
+| Signal | GPIO pin |
+|---|---|
+| SDA | 21 |
+| SCL | 22 |
+
+### I2C device addresses
+
+| Device | Address |
+|---|---|
+| QMC5883L | 0x0D |
+| BMP180 | 0x77 |
+
+<Note>
+The launcher does not have an onboard MPU6050. Accelerometer values used for tilt-compensated heading are sourced from the rocket's IMU via the UART telemetry stream.
+</Note>
+
+### GPS module (Serial1)
+
+| Signal | GPIO pin | Baud rate |
+|---|---|---|
+| RX1 | 4 | 9600 |
+
+<Note>
+GPIO 4 is receive-only in this application. The GPS TX line connects here; the ESP32 TX1 line is unused (passed as `-1` in firmware).
+</Note>
+
+### UART to rocket (Serial2)
+
+| Signal | GPIO pin | Baud rate | RX buffer |
+|---|---|---|---|
+| TX2 | 17 | 115200 | — |
+| RX2 | 16 | 115200 | 2048 bytes |
+
+### Control switches and indicators
+
+| Function | GPIO pin | Type | Logic |
+|---|---|---|---|
+| Arm switch | 5 | Toggle switch | `INPUT_PULLUP`; LOW = armed |
+| Launch button | 18 | Momentary N.O. | `INPUT_PULLUP`, active LOW |
+| Status LED | 23 | LED | HIGH = on |
+| Buzzer | 2 | Active buzzer | LOW = on |
+| Launcher servo | 19 | SG90-class servo | ON=170°, OFF=55° |
+
+### WiFi configuration
+
+| Parameter | Value |
+|---|---|
+| Mode | SoftAP (access point) |
+| SSID | `ROCKET_LAUNCHER` |
+| IP address | 192.168.4.1 |
+| UDP port | 4444 |
+
+---
+
+## Dashboard connection
+
+The dashboard (Python) connects to the launcher's WiFi AP and exchanges messages over UDP on port 4444.
+
+| Parameter | Value |
+|---|---|
+| Listen IP | 0.0.0.0 |
+| Listen port | 4444 |
+| Launcher IP | 192.168.4.1 |
+
+### Telemetry protocol (UDP, ASCII)
+
+| Direction | Format | Example |
+|---|---|---|
+| Rocket → Dashboard (relayed by launcher) | `T,<ms>,<roll>,<rate>,<output>` | `T,1234,5.2,-3.1,4` |
+| Rocket → Dashboard (relayed by launcher) | `STATUS:<state>,<Kp>,<Kd>,<skew>` | `STATUS:FLIGHT,0.5,0.2,1.3` |
+| Launcher → Dashboard | `ENV,<lat>,<lon>,<alt>,<gpsState>` | `ENV,34.1467,-118.3885,200.5,2` |
+| Dashboard → Rocket | `PID,<Kp>,<Kd>` | `PID,0.8,0.3` |
+| Dashboard → Rocket | `launch` | `launch` |
+| Dashboard → Rocket | `calibrate` | `calibrate` |
+
+`gpsState` values: `0` = no NMEA data, `1` = NMEA present but no fix, `2` = full GPS fix.
+
+Commands sent from the dashboard to the rocket are forwarded by the launcher over Serial2.

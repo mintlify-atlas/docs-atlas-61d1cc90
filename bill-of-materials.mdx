@@ -1,0 +1,53 @@
+---
+title: "Bill of materials"
+description: "Complete component list for the MANPADS rocket and launcher prototype (~$96 total)."
+---
+
+The full prototype uses off-the-shelf consumer electronics and 3D-printed structural parts. Total hardware cost is approximately **$96**.
+
+<Note>
+  GPIO pin numbers below are authoritative from the firmware source (`Launcher/src/main.cpp`). The wiring reference document (`docs/WIRING.md`) was reverse-engineered separately and contains minor discrepancies — trust the source code values listed here.
+</Note>
+
+## Rocket
+
+| Component | Qty | Notes |
+|---|---|---|
+| ESP32 DevKit V1 | 1 | Flight computer. Runs roll stabilization firmware. |
+| MPU6050 IMU | 1 | Roll stabilization. I2C address 0x68, SDA GPIO21, SCL GPIO22. |
+| SG90 / MG90 micro servo | 5 | Left canard GPIO26, right canard GPIO25, up canard GPIO27, down canard GPIO14, ignition GPIO5. |
+| 3D-printed body, fins, canards | — | Designed in Fusion 360. Files included in repository. Folding fin design. |
+| Rocket motor | 1 | Ignited by the ignition servo actuating the igniter mechanism. |
+
+## Launcher
+
+| Component | Qty | Notes |
+|---|---|---|
+| ESP32 DevKit V1 | 1 | Ground station controller. Runs WiFi SoftAP and sensor fusion firmware. |
+| QMC5883L compass | 1 | Magnetic heading. I2C address 0x0D. |
+| BMP180 barometer | 1 | Altitude measurement with EMA filtering (α = 0.15). I2C address 0x77. |
+| GPS module (NMEA, 9600 baud) | 1 | Position fix. Connected to Serial1 RX at GPIO4. |
+| SG90 micro servo | 1 | Launcher ignition servo. GPIO19 (`LAUNCHER_SERVO_PIN`). |
+| Toggle arm switch | 1 | GPIO5 (`SWITCH_PIN`). `INPUT_PULLUP` — active LOW when armed. |
+| Momentary launch button | 1 | GPIO18 (`BUTTON_PIN`). N.O., `INPUT_PULLUP`, active LOW. Must be held for 1 s to trigger. |
+| LED indicator | 1 | GPIO23 (`LED_PIN`). On when system is in `READY` state. |
+| Active buzzer | 1 | GPIO2 (`BUZZER_PIN`). LOW-trigger. Used for arm confirmation, success tones, and error tones. |
+
+<Tip>
+  The QMC5883L and BMP180 share the same I2C bus (SDA GPIO21, SCL GPIO22) on the launcher. Ensure pull-up resistors are present on SDA and SCL — most breakout boards include them.
+</Tip>
+
+<Note>
+  The launcher does not have its own MPU6050. Accelerometer data used for tilt-compensated heading is sourced from the rocket's MPU6050 telemetry, forwarded to the launcher over the UART link.
+</Note>
+
+## Software and tools
+
+| Tool | Purpose |
+|---|---|
+| PlatformIO IDE | Firmware build and flash for both rocket and launcher. Targets `esp32dev` board. |
+| Python 3 + pip | Dashboard runtime environment. |
+| matplotlib >= 3.5.0 | Live telemetry plotting in the dashboard. |
+| numpy >= 1.21.0 | Numerical processing for telemetry data. |
+| OpenRocket | Aerodynamic stability simulation. Simulation files included in repository. |
+| Fusion 360 | CAD design for rocket body, fins, canards, and launcher structure. |

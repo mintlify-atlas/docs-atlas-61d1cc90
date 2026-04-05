@@ -1,0 +1,83 @@
+{
+  "projectType": "general",
+  "projectName": "MANPADS Rocket & Launcher",
+  "projectDescription": "A low-cost proof-of-concept guided rocket and launcher prototype using ESP32 microcontrollers, 3D-printed components, and PD-controlled canard fins for roll stabilization.",
+  "theme": "aspen",
+  "primaryColor": "#C0392B",
+  "lightColor": "#E74C3C",
+  "darkColor": "#922B21",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "system-overview",
+              "bill-of-materials"
+            ]
+          },
+          {
+            "group": "Hardware",
+            "pages": [
+              "hardware/rocket",
+              "hardware/launcher",
+              "hardware/wiring"
+            ]
+          },
+          {
+            "group": "Firmware",
+            "pages": [
+              "firmware/setup",
+              "firmware/rocket-flight-computer",
+              "firmware/launcher-ground-station",
+              "firmware/calibration"
+            ]
+          },
+          {
+            "group": "Ground Control",
+            "pages": [
+              "ground-control/dashboard",
+              "ground-control/telemetry-protocol",
+              "ground-control/pid-tuning"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/launch-procedure",
+              "operations/safety",
+              "operations/simulation"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "ESP32-based flight computer with MPU6050 IMU for roll stabilization",
+    "PD controller driving four canard servos (±12° max deflection)",
+    "Folding fin design for compact launcher integration",
+    "WiFi SoftAP ground station relaying telemetry via UDP",
+    "Python Tkinter dashboard with live telemetry plots and PID tuning",
+    "GPS, compass (QMC5883L), and barometer (BMP180) sensor fusion on launcher",
+    "Digital and physical launch triggering with arm/safe state machine",
+    "Heartbeat watchdog and abort sequences for safety"
+  ],
+  "publicApiSurface": [
+    "Serial2 command: ARM — arms the rocket flight computer",
+    "Serial2 command: IGNITE — triggers motor ignition servo",
+    "Serial2 command: CALIBRATE — re-zeroes gyro offset",
+    "Serial2 command: PID,<Kp>,<Kd> — updates stabilization gains at runtime",
+    "UDP command: launch — digital launch trigger from dashboard",
+    "UDP command: calibrate — remote gyro calibration",
+    "UDP command: PID,<Kp>,<Kd> — PID tuning from dashboard",
+    "UDP telemetry T,<ms>,<roll>,<rate>,<output> — rocket roll telemetry",
+    "UDP telemetry STATUS:<state>,<Kp>,<Kd>,<skew> — rocket state broadcast",
+    "UDP telemetry ENV,<lat>,<lon>,<alt>,<gpsState> — launcher environment data",
+    "calibrateGyro() — averages 200 gyro samples to compute bias offset",
+    "Launcher state machine: SAFE → ARMING → READY → IGNITING"
+  ]
+}

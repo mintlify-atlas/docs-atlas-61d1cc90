@@ -1,0 +1,192 @@
+---
+title: "Launcher ground station"
+description: How the ESP32 launcher firmware works — state machine, sensor fusion, WiFi relay, and safety logic.
+---
+
+## Overview
+
+The launcher firmware runs on an ESP32 and manages three responsibilities in parallel:
+
+1. **Arm/launch sequencing** — drives a physical servo to arm the rocket igniter and coordinates the fire command.
+2. **Telemetry relay** — forwards rocket `DATA` packets to a connected dashboard over WiFi UDP.
+3. **Sensor fusion** — computes tilt-compensated magnetic heading from a QMC5883L compass and accelerometer data (`ax`, `ay`, `az`) forwarded from the rocket's MPU6050 via the UART `DATA` stream; broadcasts GPS position and filtered barometric altitude.
+
+---
+
+## State machine
+
+| State | Description |
+| ----- | ----------- |
+| `SAFE` | Servo OFF, LED off, waiting for the arm switch |
+| `ARMING` | Servo moves to ON (170°), waits up to 8 s for rocket `READY` |
+| `READY` | Armed and waiting for the launch trigger |
+| `IGNITING` | Sends `IGNITE` to rocket, waits up to 5 s for `IGNITED` ACK |
+
+The arm switch (GPIO5, active-low) is checked at the top of every loop iteration. Lowering it from any non-`SAFE` state immediately calls `abortSequence()`.
+
+---
+
+## WiFi access point
+
+The launcher creates a SoftAP on startup:
+
+| Parameter | Value |
+| --------- | ----- |
+| SSID | `ROCKET_LAUNCHER` |
+| Password | `launch_secure` |
+| IP address | 192.168.4.1 |
+| UDP port | 4444 |
+
+The dashboard IP is auto-detected: the first UDP packet received from any host sets `dashboardIP` and enables `dashboardConnected`. After that, all outgoing packets go to that specific IP rather than broadcasting.
+
+---
+
+## Arming sequence
+
+When the arm switch is raised, the launcher enters `ARMING`:
+
+1. The launcher servo moves to 170° (`SERVO_ON`).
+2. The firmware polls `processSerial2()` for up to 8 s waiting for a `READY` message from the rocket.
+3. If `READY` is not received within 8 s, `abortSequence()` is called.
+4. On success, it samples the rocket's accelerometer data (via the last parsed `mpu_ay`/`mpu_az` values) over 150 ms to compute tilt-compensation vectors `cal_ay` and `cal_az`.
+5. Sends `ARM` to the rocket over Serial2 and transitions to `READY`.
+
+<Note>
+  The Serial2 RX buffer is set to 2048 bytes to prevent overflow at 115200 baud during the high-frequency DATA telemetry stream.
+</Note>
+
+---
+
+## Launch triggering
+
+Two methods can trigger ignition from `READY` state:
+
+**Physical button (GPIO18):** The button must be held continuously for a full second. The buzzer sounds while it is held. If released early, ignition is not triggered.
+
+```cpp
+} else if (isButtonPressed()) {
+    unsigned long triggerStart = millis();
+    buzzerOn();
+    while (isButtonPressed() && millis() - triggerStart < 1000) {
+        processUDP();
+        processSerial2();
+        processGPS();
+        if (!isSwitchArmed()) { buzzerOff(); return; }
+        delay(10);
+    }
+    buzzerOff();
+    if (isButtonPressed()) triggered = true;
+}
+```
+
+**UDP command from dashboard:** Sending `launch` over UDP sets `udpLaunchTriggered = true`, which is consumed on the next loop iteration.
+
+When triggered, the launcher sends `CALIBRATE` followed by `IGNITE` to the rocket over Serial2.
+
+---
+
+## Heartbeat watchdog
+
+While in `READY` state, the launcher monitors how recently it received a `DATA` or `ALIVE` packet from the rocket. If no such packet arrives within 2000 ms, `abortSequence()` is called automatically:
+
+```cpp
+if (millis() - lastHeartbeatTime > HEARTBEAT_TIMEOUT) {
+    abortSequence("Lost heartbeat from Rocket!");
+    return;
+}
+```
+
+`lastHeartbeatTime` is updated whenever `processSerial2()` parses a message that starts with `DATA,` or `ALIVE`.
+
+---
+
+## Sensor fusion
+
+`updateAndPrintFusion()` runs at the end of every main loop iteration and is rate-limited to once every 500 ms. It reads raw compass values from the QMC5883L, applies hard-iron calibration offsets and scale factors, then computes a tilt-compensated heading using accelerometer data received from the rocket:
+
+```cpp
+float g_fwd = mpu_ax;
+float g_right = mpu_az * cal_ay - mpu_ay * cal_az;
+float g_down  = mpu_ay * cal_ay + mpu_az * cal_az;
+
+float pitch = atan2(-g_fwd, sqrt(g_right * g_right + g_down * g_down));
+float roll = atan2(g_right, g_down);
+
+float x_m = cal_y * cos(pitch) + cal_z * sin(roll) * sin(pitch) + cal_x * cos(roll) * sin(pitch);
+float y_m = cal_z * cos(roll) - cal_x * sin(roll);
+
+float heading = atan2(y_m, x_m) * 180.0 / PI;
+```
+
+`cal_ay` and `cal_az` are the tilt-compensation unit vectors computed during the arming sequence. `cal_x`, `cal_y`, `cal_z` are the compass readings after applying the hard-iron offsets and scale factors.
+
+The result is sent to the dashboard as a `[FUSION]` packet every 500 ms.
+
+<Note>
+  If the compass returns all-zero readings (indicating disconnection or I2C bus crash), the firmware resets the I2C bus and re-initialises the compass before returning.
+</Note>
+
+---
+
+## GPS tracking
+
+The GPS module connects to GPIO4 (RX only) via Hardware Serial 1 at 9600 baud.
+
+**Startup check:** During `setup()`, the firmware waits up to 5 s for any NMEA sentence (`$` character). If no data arrives, the launcher halts in an error loop (LED blinks, error tone repeats) and will not proceed.
+
+GPS state is reported to the dashboard with three levels:
+
+| State | Meaning |
+| ----- | ------- |
+| `0` | No NMEA data — module disconnected or failed |
+| `1` | NMEA sentences arriving but no satellite fix |
+| `2` | Full fix with valid lat/lon |
+
+State 0 is detected by comparing `gps.charsProcessed()` between ENV packet intervals. If the count has not changed, the module has stopped sending data.
+
+---
+
+## Altitude filtering
+
+Barometric altitude from the BMP180 is smoothed with an exponential moving average (EMA) before being sent to the dashboard:
+
+```cpp
+filteredAlt = (ALT_ALPHA * newAlt) + ((1.0 - ALT_ALPHA) * filteredAlt);
+```
+
+`ALT_ALPHA = 0.15`, giving heavy smoothing (85% weight on the previous value). The filter is updated and the ENV packet is sent once per second.
+
+---
+
+## ENV packet
+
+Every 1 s, the launcher sends an environment packet to the dashboard:
+
+```
+ENV,<lat>,<lon>,<alt>,<gpsState>
+```
+
+`lat` and `lon` are 6-decimal-place floats (0.0 when no fix). `alt` is the EMA-filtered altitude in metres (1 decimal place).
+
+---
+
+## Safety and abort
+
+`abortSequence()` moves the launcher servo to OFF (55°), turns off the LED, sounds the error tone (five short beeps), and calls `waitForSwitchReset()`.
+
+`waitForSwitchReset()` sets `currentState = SAFE` and loops — blinking the LED at 100 ms intervals — until the arm switch is lowered. It continues to process UDP, Serial2, and GPS traffic during this wait so the dashboard stays connected.
+
+<Warning>
+  There is no way to resume an aborted sequence without first lowering and re-raising the arm switch. This is intentional.
+</Warning>
+
+---
+
+## UDP commands (dashboard → launcher)
+
+| Command | Action |
+| ------- | ------ |
+| `HELLO` | Updates `dashboardIP` to the sender; used for initial discovery |
+| `launch` | Sets `udpLaunchTriggered = true` |
+| `calibrate` | Forwards `CALIBRATE` to the rocket over Serial2 |
+| `PID,<Kp>,<Kd>` | Forwards PID update directly to the rocket over Serial2 |

@@ -1,0 +1,85 @@
+---
+title: "Aerodynamic simulation"
+description: OpenRocket simulation files and stability analysis for the MANPADS rocket design.
+---
+
+The rocket design was simulated in OpenRocket before physical testing to evaluate aerodynamic stability. The simulation file and output images are included in the repository under the `Simulation/` directory.
+
+---
+
+## Simulation files
+
+| File | Description |
+|------|-------------|
+| `Simulation/Folding Stabilized Rocket.ork` | Full OpenRocket project file — rocket geometry, motor, and simulation configuration |
+| `Simulation/OpenRocket_3D_View.png` | 3D render of the rocket geometry in OpenRocket |
+| `Simulation/Side View.png` | Side profile view of the rocket |
+| `Simulation/Stability Graph.png` | Stability margin vs. velocity graph |
+
+---
+
+## Opening the simulation
+
+<Steps>
+  <Step title="Install OpenRocket">
+    Download OpenRocket from [openrocket.info](https://openrocket.info) and install it. OpenRocket requires Java.
+  </Step>
+  <Step title="Open the .ork file">
+    Launch OpenRocket, then open `Simulation/Folding Stabilized Rocket.ork` from the repository.
+
+    The file contains the full rocket geometry including the folding fin assembly and canard placement.
+  </Step>
+  <Step title="Run or review the simulation">
+    Click **Simulate** to run the flight simulation, or select **Edit Rocket** to inspect the component geometry. The stability margin and CP/CG positions are displayed in the design view.
+  </Step>
+</Steps>
+
+---
+
+## Stability analysis
+
+OpenRocket computes the **Center of Pressure (CP)** and **Center of Gravity (CG)** for the rocket design. Passive aerodynamic stability requires that the CG is forward of the CP — this produces a restoring moment that keeps the nose pointing into the airstream.
+
+Stability margin is expressed in **calibers**: the distance between CG and CP divided by the rocket body diameter.
+
+| Stability margin | Assessment |
+|-----------------|------------|
+| Less than 1 caliber | Marginally stable or unstable |
+| 1–2 calibers | Stable |
+| Greater than 2 calibers | Very stable |
+
+The folding fin geometry was iterated to achieve an adequate stability margin. The actual values for this design are in the `.ork` file — open it in OpenRocket to read the computed CP and CG positions.
+
+<Note>
+  Canard fins provide active roll stabilization via the PD control loop, but they do not significantly shift the CP or CG for the purposes of passive stability analysis. OpenRocket's stability calculation reflects the passive aerodynamic behavior of the airframe.
+</Note>
+
+---
+
+## Interpreting the stability graph
+
+The `Stability Graph.png` file shows stability margin as a function of velocity:
+
+- **X-axis**: velocity (m/s)
+- **Y-axis**: stability margin (calibers)
+
+Stability typically increases with velocity as aerodynamic forces grow relative to inertial forces. At low velocities (off the rail or tube), the margin is lowest — this is the most critical phase to design for.
+
+<Note>
+  Do not rely on a single stability value. Review the full velocity range in the graph, paying particular attention to the margin at low speeds immediately after launch.
+</Note>
+
+---
+
+## Simulation limitations
+
+OpenRocket models passive aerodynamic stability only. There are several aspects of the real system that it does not capture:
+
+| Aspect | OpenRocket | Real system |
+|--------|------------|-------------|
+| Roll stabilization | Not modeled | Active PD control via canard servos |
+| Fin deployment | Static geometry | Fins fold for storage, deploy at launch |
+| Motor selection | Configurable in .ork | Use the .ork file to evaluate different motors |
+| Wind and gusts | Basic model | Not fully representative |
+
+Use the `.ork` file to simulate different motor options and evaluate how thrust curve and total impulse affect the trajectory and stability margin over the flight.

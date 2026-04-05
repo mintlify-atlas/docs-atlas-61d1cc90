@@ -1,0 +1,150 @@
+---
+title: "Rocket flight computer"
+description: How the ESP32 rocket firmware works — state machine, PD stabilization loop, telemetry, and command handling.
+---
+
+## Overview
+
+The rocket firmware runs on an ESP32 using the Arduino framework. The main loop executes at approximately 20 Hz (50 ms telemetry interval). It reads roll rate from an MPU6050 IMU, integrates it into a roll angle, applies a PD controller to compute canard deflection, and relays telemetry to the launcher over UART (Serial2 at 115200 baud).
+
+---
+
+## State machine
+
+The firmware progresses through four states:
+
+| State | Description | Entry condition |
+| ----- | ----------- | --------------- |
+| `IDLE` | Servos at center, sends `READY` every 1 s | Default on boot |
+| `ARMED` | Gyro calibrated, waiting for ignition | Receives `ARM` command |
+| `IGNITING` | Ignition servo moves to 150°, waits 2500 ms | Receives `IGNITE` command |
+| `FLIGHT` | PD control active on all four canards | 2500 ms after ignition |
+
+After 2500 ms in `IGNITING`, the ignition servo returns to 35° (OFF), the firmware transitions to `FLIGHT`, and sends `IGNITED` to the launcher over Serial2.
+
+---
+
+## MPU6050 configuration
+
+The sensor is initialised on I2C pins SDA=21, SCL=22 with the following ranges:
+
+| Parameter | Value |
+| --------- | ----- |
+| Accelerometer range | ±8 G |
+| Gyro range | 500 °/s |
+| Filter bandwidth | 10 Hz |
+
+---
+
+## Gyro calibration
+
+`calibrateGyro()` is called once at boot and again each time an `ARM` or `CALIBRATE` command is received. It collects 200 samples over ~1 s (5 ms apart) to compute the gyro bias and the physical skew angle of the rocket body:
+
+```cpp
+void calibrateGyro() {
+    float sumGyroX = 0, sumAccY = 0, sumAccZ = 0;
+    int samples = 200;
+    for (int i = 0; i < samples; i++) {
+        sensors_event_t a, g, temp;
+        mpu.getEvent(&a, &g, &temp);
+        sumGyroX += g.gyro.x;
+        sumAccY += a.acceleration.y;
+        sumAccZ += a.acceleration.z;
+        delay(5);
+    }
+    gyroX_offset = sumGyroX / samples;
+    float avgY = sumAccY / samples;
+    float avgZ = sumAccZ / samples;
+    physical_skew_angle = atan2(avgY, avgZ) * 180.0 / PI;
+    roll = 0.0;
+    last_time = millis();
+}
+```
+
+`physical_skew_angle` measures how far the rocket body deviates from vertical at rest. This value is included in every telemetry packet so the dashboard can display it, but it does not feed back into the control loop.
+
+---
+
+## PD stabilization loop
+
+Each iteration of `loop()` integrates gyro rate into a roll angle and computes a PD output:
+
+```cpp
+float raw_rate_rad = g.gyro.x - gyroX_offset;
+float rate_deg_s = raw_rate_rad * 180.0 / PI;
+roll += rate_deg_s * dt;
+
+float output = (Kp * roll) + (Kd * rate_deg_s);
+int servo_offset = constrain((int)output, -MAX_DEFLECTION, MAX_DEFLECTION);
+```
+
+- **P term** (`Kp * roll`): corrects accumulated roll angle. Default `Kp = 0.5`.
+- **D term** (`Kd * rate_deg_s`): damps rapid rotation. Default `Kd = 0.2`.
+- The output is clamped to ±`MAX_DEFLECTION` (±12°).
+
+---
+
+## Servo assignments
+
+All four canard servos share the same `servo_offset`. In `FLIGHT` state they move together; in all other states they return to their center positions.
+
+| Canard | GPIO | Center angle |
+| ------ | ---- | ------------ |
+| LEFT | 26 | 115° |
+| RIGHT | 25 | 80° |
+| UP | 27 | 80° |
+| DOWN | 14 | 115° |
+
+In `FLIGHT`:
+
+```cpp
+leftServo.write(LEFT_CENTER + servo_offset);
+rightServo.write(RIGHT_CENTER + servo_offset);
+upServo.write(UP_CENTER + servo_offset);
+downServo.write(DOWN_CENTER + servo_offset);
+```
+
+In all other states servos write their center value and `servo_offset` is forced to `0` for telemetry accuracy.
+
+<Note>
+  The ignition servo is on GPIO 5. It moves to 150° (`IGNITE_SERVO_ON`) when `IGNITING` begins and returns to 35° (`IGNITE_SERVO_OFF`) after 2500 ms.
+</Note>
+
+---
+
+## Command protocol
+
+Commands are received over Serial2 (RX=GPIO16, TX=GPIO17) at 115200 baud. Lines are newline-terminated; carriage returns are ignored. The firmware parses complete lines from `cmdBuffer`.
+
+| Command | State required | Action |
+| ------- | -------------- | ------ |
+| `ARM` | `IDLE` | Transitions to `ARMED`, calls `calibrateGyro()` |
+| `IGNITE` | any | Transitions to `IGNITING`, moves ignition servo to ON |
+| `CALIBRATE` | any | Calls `calibrateGyro()` |
+| `PID,<Kp>,<Kd>` | any | Parses and updates `Kp` and `Kd` as floats |
+
+<Warning>
+  `IGNITE` is accepted in any state. Sending it outside of `ARMED` will still fire the ignition servo.
+</Warning>
+
+---
+
+## Telemetry output
+
+A `DATA` packet is sent over Serial2 every 50 ms:
+
+```
+DATA,<ax>,<ay>,<az>,<roll>,<rate>,<servo_offset>,<state>,<Kp>,<Kd>,<physical_skew_angle>
+```
+
+| Field | Description | Unit |
+| ----- | ----------- | ---- |
+| `ax`, `ay`, `az` | Accelerometer readings | m/s² (2 decimal places) |
+| `roll` | Integrated roll angle | degrees |
+| `rate` | Roll rate (bias-corrected) | degrees/s |
+| `servo_offset` | Current canard deflection | degrees (integer) |
+| `state` | Current state string | — |
+| `Kp`, `Kd` | Active PD gains | — |
+| `physical_skew_angle` | Body skew at last calibration | degrees |
+
+In addition, a `READY` string is sent every 1 s while in `IDLE` state so the launcher can detect when the rocket is powered and responsive.

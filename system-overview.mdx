@@ -1,0 +1,101 @@
+---
+title: "System overview"
+description: "Full system architecture covering the rocket, launcher, and ground control dashboard."
+---
+
+The MANPADS system has three interconnected subsystems: a rocket flight computer, a launcher ground station, and a Python ground control dashboard. The rocket and launcher communicate over a wired UART link; the launcher relays telemetry and accepts commands over WiFi UDP to the dashboard.
+
+<CardGroup cols={3}>
+  <Card title="Rocket flight computer" icon="arrow-up">
+    ESP32 DevKit V1 running PD roll stabilization. Reads MPU6050 gyro, drives four canard servos, and streams telemetry over UART Serial2 at 115200 baud.
+  </Card>
+  <Card title="Launcher ground station" icon="tower-broadcast">
+    ESP32 DevKit V1 acting as WiFi access point and communication relay. Integrates GPS, compass, and barometer. Controls the ignition servo and arm/launch inputs.
+  </Card>
+  <Card title="Ground control dashboard" icon="chart-line">
+    Python application connecting via UDP to the launcher's WiFi AP. Displays live telemetry plots, reports GPS position, and allows remote PID tuning and launch trigger.
+  </Card>
+</CardGroup>
+
+## Communication flow
+
+Data flows in two stages: UART Serial2 between the rocket and launcher, then UDP WiFi between the launcher and the dashboard.
+
+| Link | Protocol | Speed / Address |
+|---|---|---|
+| Rocket → Launcher | UART Serial2 (TX2 GPIO17 / RX2 GPIO16) | 115200 baud |
+| Launcher → Rocket | UART Serial2 (TX2 GPIO17 / RX2 GPIO16) | 115200 baud |
+| Launcher → Dashboard | UDP WiFi (SoftAP `ROCKET_LAUNCHER`) | IP 192.168.4.1, port 4444 |
+| Dashboard → Launcher | UDP WiFi | IP 192.168.4.1, port 4444 |
+
+The launcher relays rocket `DATA` packets upstream as `T,<ms>,<roll>,<rate>,<output>` and `STATUS:<state>,<Kp>,<Kd>,<skew>` frames. It also publishes environment data as `ENV,<lat>,<lon>,<alt>,<gpsState>` once per second. The dashboard can send `PID,<Kp>,<Kd>`, `launch`, and `calibrate` commands downstream.
+
+<Note>
+  The launcher acts as a transparent relay for most rocket commands. It does not modify PID or calibration payloads — they pass through Serial2 directly to the rocket.
+</Note>
+
+## State machines
+
+### Rocket
+
+The rocket moves through four states, controlled by commands arriving over Serial2.
+
+| State | Entry condition | Active behaviour |
+|---|---|---|
+| `IDLE` | Power-on default | Servos at center. Sends `READY` every 1000 ms. |
+| `ARMED` | Receives `ARM` command while in `IDLE` | Runs `calibrateGyro()`. Servos at center. |
+| `IGNITING` | Receives `IGNITE` command | Drives ignition servo to `IGNITE_SERVO_ON` (150°). Runs for 2500 ms. |
+| `FLIGHT` | 2500 ms after ignition | PD controller active. Canard servos respond to roll error. |
+
+The ignition servo retracts to `IGNITE_SERVO_OFF` (35°) when `IGNITING` times out and the state transitions to `FLIGHT`.
+
+### Launcher
+
+The launcher uses a four-state enum driven by the arm switch and launch button (or UDP `launch` command).
+
+| State | Entry condition | Active behaviour |
+|---|---|---|
+| `SAFE` | Power-on default, or after abort | Servo off, LED off. Waits for arm switch. |
+| `ARMING` | Arm switch goes LOW (armed) | Sends `ARM` to rocket. Waits up to 8000 ms for `READY` ACK. |
+| `READY` | Rocket ACK received | LED on. Monitors heartbeat; aborts if silent for 2000 ms. |
+| `IGNITING` | Launch button held 1 s, or UDP `launch` | Sends `CALIBRATE` then `IGNITE` to rocket. Waits up to 5000 ms for `IGNITED` ACK. |
+
+## Sensor suite
+
+### Rocket sensors
+
+| Sensor | Interface | Address / Pin | Measurement |
+|---|---|---|---|
+| MPU6050 IMU | I2C | 0x68, SDA GPIO21, SCL GPIO22 | Roll angle, gyro rate (X-axis) |
+
+The rocket samples the MPU6050 every loop iteration (~1 ms) and integrates gyro rate to track roll. Accelerometer axes are also read and transmitted in the `DATA` packet.
+
+### Launcher sensors
+
+| Sensor | Interface | Address / Pin | Measurement |
+|---|---|---|---|
+| QMC5883L compass | I2C | 0x0D, SDA GPIO21, SCL GPIO22 | Magnetic heading |
+| BMP180 barometer | I2C | 0x77, shared bus | Altitude (EMA filtered, α = 0.15) |
+| GPS module (NMEA) | UART Serial1 | RX GPIO4, 9600 baud | Latitude, longitude, fix state |
+
+For tilt-compensated heading, the launcher uses accelerometer data (`ax`, `ay`, `az`) forwarded from the rocket's MPU6050 via the `DATA` UART telemetry stream. The launcher itself does not have an onboard IMU.
+
+The launcher fuses compass and rocket-sourced accelerometer data every 500 ms to compute tilt-compensated heading and pitch, then relays the result to the dashboard as a `[FUSION]` message.
+
+## Key system parameters
+
+These values are extracted directly from the firmware source.
+
+| Parameter | Value | Source |
+|---|---|---|
+| Telemetry rate | 50 ms (20 Hz) | `Rocket/src/main.cpp` — `lastTelemetrySent` interval |
+| Max canard deflection | ±12° | `MAX_DEFLECTION = 12` |
+| Default Kp | 0.5 | `float Kp = 0.5` |
+| Default Kd | 0.2 | `float Kd = 0.2` |
+| Heartbeat timeout | 2000 ms | `HEARTBEAT_TIMEOUT = 2000` |
+| Ignition duration | 2500 ms | `current_time - igniteStartTime > 2500` |
+| WiFi SSID | `ROCKET_LAUNCHER` | `const char* ssid = "ROCKET_LAUNCHER"` |
+| UDP port | 4444 | `const int udpPort = 4444` |
+| Launcher IP | 192.168.4.1 | SoftAP default gateway |
+| GPS baud rate | 9600 | `SerialGPS.begin(9600, ...)` |
+| UART baud rate | 115200 | `Serial2.begin(115200, ...)` |

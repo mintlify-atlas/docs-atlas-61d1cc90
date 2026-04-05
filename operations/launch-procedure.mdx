@@ -1,0 +1,159 @@
+---
+title: "Launch procedure"
+description: Step-by-step checklist for a safe and successful launch of the MANPADS rocket system.
+---
+
+This page covers the full launch sequence from power-on to ignition confirmation. Complete every step in order and do not skip the pre-launch checks.
+
+---
+
+## Pre-launch checks
+
+Verify all of the following before proceeding:
+
+- Rocket flight computer is flashed and powered
+- Launcher ground station is flashed and powered
+- Arm switch is in the **SAFE** position (GPIO5 HIGH)
+- Rocket is seated in the launcher tube with the igniter installed
+- GPS module is connected — the launcher halts with a repeating error tone at boot if no NMEA data is detected within 5 seconds
+
+---
+
+## Dashboard connection
+
+<Steps>
+  <Step title="Connect to the launcher WiFi">
+    On your laptop, connect to the `ROCKET_LAUNCHER` WiFi network (password: `launch_secure`).
+
+    | Parameter | Value |
+    |-----------|-------|
+    | SSID | `ROCKET_LAUNCHER` |
+    | Launcher IP | `192.168.4.1` |
+    | UDP port | `4444` |
+  </Step>
+  <Step title="Start the dashboard">
+    From the `Firmware/` directory:
+
+    ```bash
+    python dashboard.py
+    ```
+  </Step>
+  <Step title="Confirm connection">
+    Wait for the status label to change from **"Connecting to Launcher AP..."** to **"Connected: 192.168.4.1"**.
+  </Step>
+  <Step title="Check GPS status">
+    Verify the GPS bubble color in the **Environment & Location** panel:
+
+    | Color | Meaning | Action |
+    |-------|---------|--------|
+    | Green | Fix acquired | Proceed |
+    | Orange | Searching for satellites | OK to proceed |
+    | Red | No GPS module | Do not proceed |
+  </Step>
+</Steps>
+
+---
+
+## Gyro calibration
+
+Before arming, calibrate the gyro with the rocket stationary in the tube:
+
+1. Click **CALIBRATE GYRO** in the dashboard Mission Control panel.
+2. Confirm the dialog prompt ("Keep rocket STILL. Zeroing Gyro.").
+3. Keep the rocket completely still for approximately 1 second (200 samples at 5 ms each).
+4. Verify that the **Roll** readout in the live telemetry panel shows a value near `0.0°`.
+
+<Note>
+  Gyro calibration is also triggered automatically during the arming sequence when the launcher sends `ARM` to the rocket. Repeating it manually before arming gives you an early check that the IMU is responding.
+</Note>
+
+---
+
+## Arming sequence
+
+Flip the arm switch from SAFE to ARMED to start the arming sequence. The following happens automatically:
+
+<Steps>
+  <Step title="Launcher enters ARMING state">
+    The arm switch (GPIO5) transitions from HIGH to LOW. The launcher moves the launcher servo to the ON position (170°) and begins waiting for a `READY` message from the rocket.
+  </Step>
+  <Step title="Rocket responds READY">
+    The rocket firmware sends `READY` over Serial2 every 1 second while in `IDLE` state. The launcher waits up to **8 seconds** for this message. If no `READY` is received, the launcher calls `abortSequence()`.
+  </Step>
+  <Step title="3 rapid beeps and orientation reference">
+    On receipt of `READY`, the launcher plays 3 rapid beeps and reads the MPU6050 accelerometer to record the launcher's orientation reference (`cal_ay`, `cal_az`).
+  </Step>
+  <Step title="Launcher sends ARM">
+    The launcher sends `ARM` to the rocket over Serial2. The rocket calibrates its gyro and transitions from `IDLE` to `ARMED`.
+  </Step>
+  <Step title="Launcher enters READY state">
+    The launcher transitions to `READY`, turns the LED on solid, and plays a success tone (2 beeps, 150 ms each).
+  </Step>
+  <Step title="Dashboard updates">
+    The state dot in the dashboard Mission Control panel turns **yellow** (ARMED).
+  </Step>
+</Steps>
+
+<Warning>
+  Do not move the rocket during the arming sequence. The launcher reads the MPU6050 orientation reference immediately after receiving `READY`. Movement during this window will produce an inaccurate reference angle.
+</Warning>
+
+---
+
+## Ignition
+
+Two methods are available. Use the physical button as the primary method.
+
+<Tabs>
+  <Tab title="Physical button">
+    <Steps>
+      <Step title="Hold the launch button">
+        Hold the launch button (GPIO18) continuously. The buzzer sounds for the entire hold duration.
+      </Step>
+      <Step title="Hold for 1 full second">
+        Keep the button held. The button must remain pressed for at least **1 second** before ignition triggers. Releasing early cancels the sequence.
+      </Step>
+      <Step title="Launcher sends ignition commands">
+        After the 1-second hold, the launcher sends `CALIBRATE` then `IGNITE` to the rocket over Serial2 (20 ms apart).
+      </Step>
+      <Step title="Rocket ignition servo fires">
+        The rocket's ignition servo moves to ON (150°). After **2500 ms**, the servo returns to OFF (35°) and the rocket transitions to `FLIGHT`.
+      </Step>
+      <Step title="IGNITED ACK received">
+        The rocket sends `IGNITED` back to the launcher. The launcher turns off the LED.
+      </Step>
+      <Step title="Dashboard updates">
+        The state dot turns **green** (FLIGHT).
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="Digital launch (dashboard)">
+    <Steps>
+      <Step title="Click DIGITAL LAUNCH">
+        Click the **DIGITAL LAUNCH** button in the Mission Control panel.
+      </Step>
+      <Step title="Confirm the warning dialog">
+        A confirmation dialog appears: **"This bypasses the physical launch button."** Click OK to proceed.
+      </Step>
+      <Step title="Launch command sent">
+        The dashboard sends a `launch` UDP packet to the launcher at `192.168.4.1:4444`. The launcher sets `udpLaunchTriggered = true` and proceeds with the same ignition sequence as the physical button method.
+      </Step>
+    </Steps>
+
+    <Warning>
+      Digital launch bypasses the physical 1-second button hold. Ensure the launch area is clear and the system is fully armed before clicking this button.
+    </Warning>
+  </Tab>
+</Tabs>
+
+---
+
+## Post-launch
+
+- Monitor the **Plot** panel in the dashboard for roll angle and servo response during flight.
+- The launcher LED turns off after ignition is confirmed.
+- Flip the arm switch back to **SAFE** to reset the system. The launcher loops in `waitForSwitchReset()` until the switch returns to SAFE before accepting new commands.
+
+<Note>
+  After ignition, the system will not accept a new arming sequence until the arm switch has been returned to SAFE. This applies whether ignition succeeded or `abortSequence()` was called.
+</Note>

@@ -1,0 +1,120 @@
+---
+title: "Firmware setup"
+description: Install PlatformIO, build, and flash the rocket and launcher firmware.
+---
+
+## Prerequisites
+
+- [PlatformIO Core](https://docs.platformio.org/en/latest/core/installation/index.html) (CLI) **or** the PlatformIO IDE extension for VS Code
+- A USB cable capable of data transfer for each ESP32
+
+---
+
+## Rocket flight computer
+
+<Steps>
+  <Step title="Open the project">
+    Open `Firmware/Rocket/` as a PlatformIO project.
+
+    - Environment: `rocket`
+    - Board: `esp32dev`
+    - Platform: `espressif32`
+    - Framework: Arduino
+  </Step>
+  <Step title="Verify dependencies">
+    PlatformIO installs these libraries automatically on first build (defined in `Firmware/Rocket/platformio.ini`):
+
+    | Library | Version |
+    | ------- | ------- |
+    | `adafruit/Adafruit MPU6050` | `^2.2.6` |
+    | `adafruit/Adafruit Unified Sensor` | `^1.1.14` |
+    | `madhephaestus/ESP32Servo` | `^3.0.5` |
+    | `Wire` | built-in |
+  </Step>
+  <Step title="Build and flash">
+    Connect the rocket ESP32, then run:
+
+    ```bash
+    pio run -e rocket -t upload
+    ```
+
+    Upload speed: 921600 baud.
+  </Step>
+</Steps>
+
+---
+
+## Launcher ground station
+
+<Steps>
+  <Step title="Open the project">
+    Open `Firmware/Launcher/` as a separate PlatformIO project.
+
+    - Environment: `launcher`
+    - Board: `esp32dev`
+    - Platform: `espressif32`
+    - Framework: Arduino
+  </Step>
+  <Step title="Verify dependencies">
+    Libraries installed automatically from `Firmware/Launcher/platformio.ini`:
+
+    | Library | Version |
+    | ------- | ------- |
+    | `adafruit/Adafruit BMP085 Library` | `^1.2.4` |
+    | `mprograms/QMC5883LCompass` | `^1.2.3` |
+    | `mikalhart/TinyGPSPlus` | `^1.1.0` |
+    | `madhephaestus/ESP32Servo` | `^3.0.5` |
+    | `Wire` | built-in |
+  </Step>
+  <Step title="Build and flash">
+    Connect the launcher ESP32, then run:
+
+    ```bash
+    pio run -e launcher -t upload
+    ```
+
+    Upload speed: 921600 baud.
+  </Step>
+</Steps>
+
+---
+
+## Monitoring serial output
+
+Both firmware targets use 115200 baud for the serial monitor. After flashing, attach with:
+
+```bash
+pio device monitor -b 115200
+```
+
+---
+
+## Dashboard setup
+
+The Python telemetry dashboard connects to the launcher's WiFi access point and displays live data.
+
+<Steps>
+  <Step title="Install Python dependencies">
+    From the `Firmware/` directory:
+
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+    | Package | Version |
+    | ------- | ------- |
+    | `matplotlib` | `>=3.5.0` |
+    | `numpy` | `>=1.21.0` |
+
+    <Note>
+      `tkinter` is required and ships with most Python distributions. On Debian/Ubuntu, install it separately with `sudo apt install python3-tk`.
+    </Note>
+  </Step>
+  <Step title="Launch the dashboard">
+    ```bash
+    python dashboard.py
+    ```
+
+    The dashboard auto-detects the launcher once it receives the first UDP packet on port 4444.
+  </Step>
+</Steps>

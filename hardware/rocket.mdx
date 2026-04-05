@@ -1,0 +1,94 @@
+---
+title: "Rocket hardware"
+description: Mechanical design, electronics, and assembly guide for the MANPADS rocket.
+---
+
+## Overview
+
+The MANPADS rocket is a folding-fin guided rocket with a 3D-printed body designed in Fusion 360. An ESP32 DevKit V1 acts as the onboard flight computer, using an MPU6050 IMU and four canard servos to stabilize roll during flight.
+
+CAD files (Fusion 360 archive format):
+
+- `CAD Files/Folding Rocket.f3z` — full rocket body with folding fin mechanism
+- `CAD Files/Rocket Nozzle.f3z` — motor nozzle assembly
+
+## Electronics
+
+All components connect to the ESP32 DevKit V1 flight computer.
+
+| Component | GPIO / Interface | Notes |
+|---|---|---|
+| ESP32 DevKit V1 | — | Flight computer |
+| MPU6050 IMU | SDA=21, SCL=22 | I2C, address 0x68 |
+| Left canard servo | GPIO 26 | Center 115°, max deflection ±12° |
+| Right canard servo | GPIO 25 | Center 80°, max deflection ±12° |
+| Up canard servo | GPIO 27 | Center 80°, max deflection ±12° |
+| Down canard servo | GPIO 14 | Center 115°, max deflection ±12° |
+| Ignition servo | GPIO 5 | ON=150°, OFF=35° |
+| UART to launcher | TX2=GPIO 17, RX2=GPIO 16 | Serial2 at 115200 baud |
+
+<Note>
+The servo pulse range is 500–2400 µs (set via `attach(pin, 500, 2400)`). Use this range when replacing servos to ensure full travel is available.
+</Note>
+
+## Canard stabilization
+
+The rocket uses a folding-fin body for compact storage at launch. Four canard fins near the nose provide active roll stabilization during flight.
+
+All four canards move together by the same offset amount each control cycle. The PD controller computes:
+
+```
+servo_offset = constrain(Kp × roll + Kd × rate, -12, 12)
+```
+
+Where:
+- `roll` — integrated roll angle in degrees (from gyroscope)
+- `rate` — gyroscope angular rate in degrees/second
+- `Kp`, `Kd` — proportional and derivative gains (defaults: Kp=0.5, Kd=0.2)
+- Output is clamped to ±12° maximum deflection
+
+Each servo writes `center ± servo_offset`. The canards only actuate while in the `FLIGHT` state; they return to center during `IDLE` and `ARMED`.
+
+<Tip>
+PID gains can be updated in flight via the dashboard using the `PID,<Kp>,<Kd>` UDP command relayed through the launcher.
+</Tip>
+
+## Ignition sequence
+
+When the launcher sends the `IGNITE` command over UART:
+
+1. The rocket enters the `IGNITING` state.
+2. The ignition servo moves to **150°** (ON position), activating the igniter.
+3. After **2500 ms**, the ignition servo returns to **35°** (OFF position).
+4. The rocket transitions to the `FLIGHT` state and sends `IGNITED` back to the launcher.
+5. The canard servos begin active stabilization.
+
+<Warning>
+The ignition servo drives a physical igniter. Ensure the rocket is secured in the launcher and the area is clear before arming.
+</Warning>
+
+## Assembly
+
+<Steps>
+  <Step title="Print the body parts">
+    Print all parts from `CAD Files/Folding Rocket.f3z` and `CAD Files/Rocket Nozzle.f3z`. Parts were designed for FDM printing. Use a material rated for heat near the nozzle section.
+  </Step>
+  <Step title="Install the folding fin mechanism">
+    The four tail fins fold inward for storage inside the launch tube. Assemble the spring-loaded hinge at the base of each fin and verify that the fins snap fully open and lock when released.
+  </Step>
+  <Step title="Mount the canard servos">
+    Press-fit or screw the four SG90-class micro servos into the canard bay near the nose. Route servo cables back through the body to the ESP32.
+  </Step>
+  <Step title="Install the ignition servo">
+    Mount the ignition servo (GPIO 5) in the motor bay. Connect its arm to the igniter trigger mechanism. Verify it moves freely between 35° (safe) and 150° (fire).
+  </Step>
+  <Step title="Install the ESP32 and MPU6050">
+    Secure the ESP32 DevKit V1 and MPU6050 breakout in the avionics bay. Connect the MPU6050 to SDA=GPIO 21 and SCL=GPIO 22. Orient the IMU so the roll axis aligns with the rocket's long axis.
+  </Step>
+  <Step title="Wire the UART link">
+    Run a two-wire UART cable from TX2 (GPIO 17) and RX2 (GPIO 16) to the rear connector that mates with the launcher umbilical.
+  </Step>
+  <Step title="Power-on and calibrate">
+    After wiring, power the flight computer. On boot it runs a 200-sample gyro calibration to zero the offset and measure the physical skew angle. Re-run calibration with the `calibrate` command from the dashboard if the rocket is repositioned.
+  </Step>
+</Steps>

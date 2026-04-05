@@ -1,0 +1,180 @@
+---
+title: "Calibration and test tools"
+description: Use the calibration sketches to set servo center positions, scan I2C devices, and test standalone roll stabilization.
+---
+
+## Overview
+
+Three utility sketches live in `Firmware/Calibration & Test Code/`. They are independent of the main rocket and launcher firmware and are flashed separately for bench testing and hardware bring-up.
+
+| Sketch | Purpose |
+| ------ | ------- |
+| `fin_calibration.ino` | Interactively set center angles for each canard servo |
+| `i2c_scanner.ino` | Discover I2C device addresses and verify sensor connectivity |
+| `roll_stabilization.ino` | Standalone PD stabilization test over WiFi |
+
+---
+
+## Fin calibration
+
+### Purpose
+
+Physical fin geometry means each canard servo may need a different "neutral" angle to hold the fin straight. `fin_calibration.ino` lets you dial in each center position individually over the Serial Monitor, then read off the values to paste into the main firmware constants.
+
+### Servo mapping
+
+| Key | Canard | GPIO |
+| --- | ------ | ---- |
+| `A` | UP | 27 |
+| `B` | DOWN | 14 |
+| `C` | RIGHT | 26 |
+| `D` | LEFT | 25 |
+
+### Serial Monitor commands
+
+Connect at 115200 baud. Commands are case-insensitive (lowercase is accepted).
+
+| Key | Action |
+| --- | ------ |
+| `A` | Select the UP servo (GPIO 27) |
+| `B` | Select the DOWN servo (GPIO 14) |
+| `C` | Select the RIGHT servo (GPIO 26) |
+| `D` | Select the LEFT servo (GPIO 25) |
+| `+` | Increase selected servo angle by 1° |
+| `-` | Decrease selected servo angle by 1° |
+
+Angle adjustments are bounded to [0°, 180°] and applied immediately. Each change prints a confirmation line:
+
+```cpp
+void changeAngle(int amount) {
+  centerAngles[activeIndex] += amount;
+  if (centerAngles[activeIndex] > 180) centerAngles[activeIndex] = 180;
+  if (centerAngles[activeIndex] < 0)   centerAngles[activeIndex] = 0;
+  servos[activeIndex].write(centerAngles[activeIndex]);
+  Serial.print(">>> Adjusted ");
+  Serial.print(servoNames[activeIndex]);
+  Serial.print(" | New Center: ");
+  Serial.println(centerAngles[activeIndex]);
+}
+```
+
+### Calibration procedure
+
+<Steps>
+  <Step title="Flash the sketch">
+    Open `fin_calibration.ino` in Arduino IDE or PlatformIO and flash it to the rocket ESP32.
+  </Step>
+  <Step title="Open Serial Monitor at 115200 baud">
+    The sketch prints its instructions and selects the UP servo by default on startup.
+  </Step>
+  <Step title="Select a servo and adjust">
+    Press `A`, `B`, `C`, or `D` to select a canard. Use `+` and `-` to move it until the fin sits mechanically neutral (parallel to the rocket body). Note the final angle printed in the monitor.
+  </Step>
+  <Step title="Repeat for all four canards">
+    Repeat the previous step for each of the remaining three servos.
+  </Step>
+  <Step title="Transfer values to main firmware">
+    Update the corresponding constants in `Firmware/Rocket/src/main.cpp`:
+
+    ```cpp
+    const int LEFT_CENTER  = 115;  // replace with your found value
+    const int RIGHT_CENTER =  80;  // replace with your found value
+    const int UP_CENTER    =  80;  // replace with your found value
+    const int DOWN_CENTER  = 115;  // replace with your found value
+    ```
+
+    Rebuild and flash the main rocket firmware.
+  </Step>
+</Steps>
+
+---
+
+## I2C scanner
+
+### Purpose
+
+`i2c_scanner.ino` scans the I2C bus on SDA=21, SCL=22 and prints every responding address. Use it to verify that all sensors are wired correctly before flashing the main firmware.
+
+### Expected addresses
+
+| Device | Address |
+| ------ | ------- |
+| MPU6050 (rocket) | `0x68` |
+| QMC5883L compass (launcher) | `0x0D` |
+| BMP180 barometer (launcher) | `0x77` |
+
+<Note>
+  The I2C scanner is useful for verifying QMC5883L (0x0D) and BMP180 (0x77) on the launcher, and MPU6050 (0x68) on the rocket. Flash it to the appropriate ESP32 board for each check.
+</Note>
+
+### How to use
+
+<Steps>
+  <Step title="Flash the sketch">
+    Open `i2c_scanner.ino` and flash it to the target ESP32 (rocket or launcher board).
+  </Step>
+  <Step title="Open Serial Monitor at 115200 baud">
+    The sketch scans the bus once during `setup()` and prints each found address with an identification note.
+  </Step>
+  <Step title="Interpret the output">
+    - All expected addresses present → wiring is correct, proceed.
+    - Missing address → check 3.3 V, GND, and SDA/SCL connections for that sensor.
+    - "Unknown error at address" → possible bus contention or damaged device.
+
+    The sketch also initialises the BMP180 and QMC5883L libraries and reads live data in `loop()` every 1 s. If either sensor returns out-of-range or all-zero values, it prints a diagnostic message and attempts an I2C bus reset.
+  </Step>
+</Steps>
+
+---
+
+## Roll stabilization test
+
+### Purpose
+
+`roll_stabilization.ino` is a self-contained version of the PD stabilization loop. It creates its own WiFi access point and sends telemetry over UDP — without the launcher relay — making it useful for tuning `Kp`/`Kd` on the bench or testing the control loop independently.
+
+### Key differences from main firmware
+
+| Feature | Main firmware | Roll stabilization sketch |
+| ------- | ------------- | ------------------------- |
+| WiFi SSID | — (no WiFi on rocket) | `RocketLink_Telemetry` |
+| Launch detect | Serial2 `IGNITE` command | Accelerometer >1.6 g for 50 ms |
+| PID persistence | Not saved | Saved to NVS Flash via `Preferences` |
+| Accelerometer range | ±8 G | ±16 G |
+| Filter bandwidth | 10 Hz | 21 Hz |
+| Max deflection | ±12° | ±15° |
+
+### States
+
+| State | Description |
+| ----- | ----------- |
+| `STATE_IDLE` | Servos detached, waiting for commands |
+| `STATE_LAUNCHING` | Monitoring accelerometer for launch detect; servos detached |
+| `STATE_FLIGHT` | PD control active; servos attached |
+
+Launch is detected when the total acceleration magnitude exceeds 1.6 g continuously for 50 ms.
+
+### NVS persistence
+
+`Kp`, `Kd`, and `gyroX_offset` are stored in NVS Flash using the `Preferences` library under the namespace `rocket_cfg`. Values survive reboots and are loaded automatically on startup.
+
+When a `PID,<Kp>,<Kd>` command is received, the new values are written to flash immediately:
+
+```cpp
+preferences.putFloat("Kp", Kp);
+preferences.putFloat("Kd", Kd);
+```
+
+### UDP commands
+
+Connect to the `RocketLink_Telemetry` WiFi network, then send commands to the ESP32 IP (default `192.168.4.1`) on UDP port 4444.
+
+| Command | Action |
+| ------- | ------ |
+| `launch` | Transitions from `STATE_IDLE` to `STATE_LAUNCHING` |
+| `calibrate` | Recalibrates gyro bias and saves it to NVS |
+| `PID,<Kp>,<Kd>` | Updates and persists PD gains (accepted in any state) |
+
+<Tip>
+  The sketch broadcasts telemetry to `192.168.4.255` until it receives its first UDP command. Once a sender is identified, it unicasts to that IP for the rest of the session.
+</Tip>
